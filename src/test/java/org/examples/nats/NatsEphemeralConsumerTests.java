@@ -8,6 +8,7 @@ import io.nats.client.JetStreamSubscription;
 import io.nats.client.Message;
 import io.nats.client.Nats;
 import io.nats.client.PullSubscribeOptions;
+import io.nats.client.api.AckPolicy;
 import io.nats.client.api.ConsumerConfiguration;
 import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
@@ -90,8 +91,8 @@ class NatsEphemeralConsumerTests {
     message.inProgress();
     ++receivedMessageCount;
     message.ackSync(Duration.ofMillis(100));
-    log("Received message #%d content: %s\nconsumer info: %s", receivedMessageCount,
-        new String(message.getData()), sub.getConsumerInfo());
+    log("Received message #%d content: %s\nmessage metadata: %s", receivedMessageCount,
+        new String(message.getData()), message.metaData());
     Thread.sleep(processingDelayInMillis);
   }
 
@@ -107,10 +108,15 @@ class NatsEphemeralConsumerTests {
   @ParameterizedTest(name = "{index} published messages:{0}  batch size: {1} delay: {2}")
   @CsvSource({ "1,1,3000", "9,1,3000", "9,2,3000", "9,3,3000" })
   @SneakyThrows
-  public void shouldConsumeAllMessages( int numberOfMessages, int batchSize,  int processingDelayInMillis) {
+  public void shouldConsumeAllMessages(int numberOfMessages, int batchSize,
+      int processingDelayInMillis) {
+    consumeAllMessages(numberOfMessages, batchSize, processingDelayInMillis);
+  }
 
-    log(" numberOfMessages: %d batchSize:%d, processingDelayInMillis:%d",
-        numberOfMessages, batchSize, processingDelayInMillis);
+  @SneakyThrows
+  public void consumeAllMessages(int numberOfMessages, int batchSize, int processingDelayInMillis) {
+    log(" numberOfMessages: %d batchSize:%d, processingDelayInMillis:%d", numberOfMessages,
+        batchSize, processingDelayInMillis);
     // pull a bit more than required
     int maxPullAttempts = (numberOfMessages / batchSize) + 3;
     // publish messages first
@@ -132,9 +138,9 @@ class NatsEphemeralConsumerTests {
         newMessageReceived = true;
         receivedMessageCount++;
         message.inProgress();
-        printMessageInfo(sub, message);
+        printMessageInfo(message);
+        message.ackSync(Duration.ofSeconds(1)); // moved ack prior to sleep and used sync,
         Thread.sleep(processingDelayInMillis);
-        message.ack();
         message = sub.nextMessage(Duration.ofMillis(10));
       }
 
@@ -148,6 +154,14 @@ class NatsEphemeralConsumerTests {
 
     assertEquals(numberOfMessages, receivedMessageCount, this::getStreamInfo);
 
+  }
+
+  @ParameterizedTest(name = "{index} published messages:{0}  batch size: {1} delay: {2}")
+  @CsvSource({ "57,100,1000", "57,100,500" })
+  @SneakyThrows
+  public void testDuplicatesMessagesWithLargeBatchSize(int numberOfMessages, int batchSize,
+      int processingDelayInMillis) {
+    consumeAllMessages(numberOfMessages, batchSize, processingDelayInMillis);
   }
 
   private String getStreamInfo() {
@@ -170,8 +184,10 @@ class NatsEphemeralConsumerTests {
     // use default options.
     PullSubscribeOptions pullOptions = PullSubscribeOptions.builder()
         .durable(null) //  ephemeral consumer
-        .configuration(ConsumerConfiguration.builder()
-            .build())
+        .configuration(
+            ConsumerConfiguration.builder().inactiveThreshold(600_000).ackPolicy(AckPolicy.Explicit)
+                //            .ackWait(Duration.ofSeconds(100))
+                .build())
         .build();
 
     startTime = System.currentTimeMillis();
@@ -194,9 +210,9 @@ class NatsEphemeralConsumerTests {
   }
 
   @SneakyThrows
-  private void printMessageInfo(final JetStreamSubscription sub, final Message message) {
-    log("Received message #%d content: %s\nconsumer info: %s", receivedMessageCount,
-        new String(message.getData()), sub.getConsumerInfo());
+  private void printMessageInfo(final Message message) {
+    log("Received message #%d content: %s\tmessage metadata: %s", receivedMessageCount,
+        new String(message.getData()), message.metaData());
   }
 
 }
